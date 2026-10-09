@@ -211,13 +211,6 @@ export class HistoryStore {
     return this.getByKey(key, book.mediaKind)!;
   }
 
-  saveStatusByRequestId(requestId: number, requestStatus: string, requestLink: string): void {
-    this.db.query(`
-      UPDATE book_history SET request_status = ?, request_link = ?, updated_at = ?
-      WHERE request_id = ?
-    `).run(requestStatus, requestLink, new Date().toISOString(), requestId);
-  }
-
   get(book: BookIdentity): HistoryRecord | null {
     return this.getByKey(bookWorkKey(book), book.mediaKind);
   }

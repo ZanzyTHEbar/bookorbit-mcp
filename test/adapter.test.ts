@@ -366,6 +366,16 @@ describe("Streamable HTTP MCP service", () => {
           accessTokenExpiresAt: new Date(Date.now() + 60_000).toISOString(),
         });
       }
+      if (url.pathname.endsWith("/book-requests/42")) {
+        return Response.json({
+          id: 42,
+          status: "available",
+          title: "The Dispossessed",
+          mediaKind: "ebook",
+          authors: ["Ursula K. Le Guin"],
+          isbn13: "9780575079038",
+        });
+      }
       const candidates = [
         { provider: "itunes", providerId: "edition-anniversary", title: "Dispossessed, The [50th Anniversary Edition]", authors: ["Ursula K. Le Guin"], publishedYear: 2024 },
         { provider: "openLibrary", providerId: "edition-original", title: "The Dispossessed", authors: ["Ursula K. Le Guin"], isbn13: "9780061054884", publishedYear: 1974 },
@@ -393,6 +403,12 @@ describe("Streamable HTTP MCP service", () => {
       expect(result.isError).not.toBe(true);
       const search = result.structuredContent as { candidates: MetadataCandidate[] };
       expect(search.candidates[0]).toMatchObject({ providerId: "edition-original", isbn13: "9780061054884" });
+      const status = await client.callTool({ name: "get_request_status", arguments: { requestId: 42 } });
+      expect(status.structuredContent).toMatchObject({ requestId: 42, status: "available" });
+      const history = await client.callTool({ name: "get_reading_history", arguments: { query: "The Dispossessed" } });
+      expect(history.structuredContent).toMatchObject({
+        items: [{ requestId: 42, requestStatus: "available", status: "already_available" }],
+      });
     } finally {
       await client.close();
       await service.close();

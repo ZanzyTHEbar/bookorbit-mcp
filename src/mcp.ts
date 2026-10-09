@@ -123,6 +123,25 @@ function statusForAvailability(availability: BookRequestAvailability, baseUrl: s
   return { status: "missing", requestId: null, requestStatus: null, link: null };
 }
 
+function identityFromRequest(request: BookRequestItem): BookIdentity {
+  const authors = Array.isArray(request.authors) ? request.authors.filter((author): author is string => typeof author === "string") : [];
+  return {
+    title: request.title,
+    authors,
+    isbn10: typeof request.isbn10 === "string" ? request.isbn10 : undefined,
+    isbn13: typeof request.isbn13 === "string" ? request.isbn13 : undefined,
+    providerKey: typeof request.providerKey === "string" ? request.providerKey : undefined,
+    providerId: typeof request.providerId === "string" ? request.providerId : undefined,
+    mediaKind: request.mediaKind,
+  };
+}
+
+function stateFromRequestStatus(status: string): RequestState {
+  if (status === "available") return "already_available";
+  if (["failed", "rejected", "cancelled"].includes(status)) return "failed";
+  return "already_requested";
+}
+
 function updateOutcome(
   history: HistoryStore,
   book: BookIdentity,
@@ -313,7 +332,12 @@ export function createMcpServer(client: BookOrbitClient, history: HistoryStore, 
   }, safeTool(async ({ requestId }) => {
     const request = await client.getRequest(requestId);
     const link = requestLink(baseUrl, request.id);
-    history.saveStatusByRequestId(request.id, request.status, link);
+    history.saveRequestOutcome(identityFromRequest(request), {
+      state: stateFromRequestStatus(request.status),
+      requestId: request.id,
+      requestStatus: request.status,
+      requestLink: link,
+    });
     return { requestId: request.id, status: request.status, title: request.title, mediaKind: request.mediaKind, link };
   }));
 
