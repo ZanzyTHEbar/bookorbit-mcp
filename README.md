@@ -6,7 +6,7 @@ A Streamable HTTP MCP adapter for BookOrbit 3.2 and later. It exposes metadata s
 
 | Tool | Description |
 | --- | --- |
-| `search_books` | Find metadata and edition candidates by title, author, publication year, or ISBN. Exact title/author/year matches rank first; ambiguous candidates remain visible. |
+| `search_books` | Find metadata and edition candidates by title, author, publication year, or ISBN. Exact matches rank first; ambiguous candidates and provider failures are reported. |
 | `find_existing_books` | Check accessible library copies and active requests. |
 | `request_book` | Request an English e-book, preferring EPUB and allowing PDF only for technical works. |
 | `get_request_status` | Return a request's current state and BookOrbit link. |

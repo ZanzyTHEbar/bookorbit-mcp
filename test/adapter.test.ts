@@ -381,7 +381,8 @@ describe("Streamable HTTP MCP service", () => {
         { provider: "openLibrary", providerId: "edition-original", title: "The Dispossessed", authors: ["Ursula K. Le Guin"], isbn13: "9780061054884", publishedYear: 1974 },
         { provider: "itunes", providerId: "wrong-author", title: "The Dispossessed", authors: ["Szilard Borbely"], publishedYear: 2016 },
       ];
-      return new Response(candidates.map((candidate) => `data: ${JSON.stringify(candidate)}\n\n`).join(""), {
+      const providerStatus = `event: provider-status\ndata: ${JSON.stringify({ provider: "amazon", outcome: "throttled" })}\n\n`;
+      return new Response(providerStatus + candidates.map((candidate) => `data: ${JSON.stringify(candidate)}\n\n`).join(""), {
         headers: { "Content-Type": "text/event-stream" },
       });
     }) as typeof fetch;
@@ -401,8 +402,9 @@ describe("Streamable HTTP MCP service", () => {
       expect(listed.tools.map((tool) => tool.name)).toContain("request_book");
       const result = await client.callTool({ name: "search_books", arguments: { title: "The Dispossessed", author: "Ursula K. Le Guin", publishedYear: 1974 } });
       expect(result.isError).not.toBe(true);
-      const search = result.structuredContent as { candidates: MetadataCandidate[] };
+      const search = result.structuredContent as { candidates: MetadataCandidate[]; complete: boolean };
       expect(search.candidates[0]).toMatchObject({ providerId: "edition-original", isbn13: "9780061054884" });
+      expect(search.complete).toBe(false);
       const status = await client.callTool({ name: "get_request_status", arguments: { requestId: 42 } });
       expect(status.structuredContent).toMatchObject({ requestId: 42, status: "available" });
       const history = await client.callTool({ name: "get_reading_history", arguments: { query: "The Dispossessed" } });

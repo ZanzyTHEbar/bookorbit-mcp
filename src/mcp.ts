@@ -268,7 +268,7 @@ export function createMcpServer(client: BookOrbitClient, history: HistoryStore, 
 
   server.registerTool("search_books", {
     title: "Search BookOrbit metadata",
-    description: "Resolve a title, author, year, or ISBN to BookOrbit book metadata, ISBNs, and editions. Searches e-books and ranks the closest edition first.",
+    description: "Resolve a title, author, year, or ISBN to BookOrbit book metadata, ISBNs, and editions. Searches e-books, ranks the closest edition first, and reports provider failures.",
     inputSchema: {
       title: z.string().trim().min(1).max(500),
       author: z.string().trim().max(255).optional(),
@@ -300,6 +300,7 @@ export function createMcpServer(client: BookOrbitClient, history: HistoryStore, 
         sourceUrl: candidate.sourceUrl,
       })),
       providerStatuses: result.providerStatuses,
+      complete: result.providerStatuses.length === 0,
       truncated: candidates.length > limit,
     };
   }));
