@@ -81,7 +81,7 @@ function normalizeMatch(value: string): string {
   return value.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
 }
 
-function metadataScore(candidate: MetadataCandidate, query: { title: string; author?: string; isbn?: string }): number {
+function metadataScore(candidate: MetadataCandidate, query: { title: string; author?: string; isbn?: string; publishedYear?: number }): number {
   const title = normalizeMatch(query.title);
   const candidateTitle = normalizeMatch(candidate.title ?? "");
   const author = normalizeMatch(query.author ?? "");
@@ -89,6 +89,7 @@ function metadataScore(candidate: MetadataCandidate, query: { title: string; aut
   const isbn = (query.isbn ?? "").replace(/[^0-9X]/gi, "").toUpperCase();
   return (candidateTitle === title ? 8 : candidateTitle && (candidateTitle.includes(title) || title.includes(candidateTitle)) ? 3 : 0)
     + (author && candidateAuthors.some((item) => item === author) ? 12 : author && candidateAuthors.some((item) => item.includes(author) || author.includes(item)) ? 5 : 0)
+    + (query.publishedYear && candidate.publishedYear ? (candidate.publishedYear === query.publishedYear ? 24 : -4) : 0)
     + (isbn && [candidate.isbn10, candidate.isbn13].some((item) => item?.replace(/[^0-9X]/gi, "").toUpperCase() === isbn) ? 16 : 0);
 }
 
@@ -267,17 +268,18 @@ export function createMcpServer(client: BookOrbitClient, history: HistoryStore, 
 
   server.registerTool("search_books", {
     title: "Search BookOrbit metadata",
-    description: "Resolve a title, author, or ISBN to BookOrbit book metadata, ISBNs, and editions. Searches e-books.",
+    description: "Resolve a title, author, year, or ISBN to BookOrbit book metadata, ISBNs, and editions. Searches e-books and ranks the closest edition first.",
     inputSchema: {
       title: z.string().trim().min(1).max(500),
       author: z.string().trim().max(255).optional(),
       isbn: z.string().trim().max(30).optional(),
+      publishedYear: z.number().int().min(1000).max(3000).optional(),
       limit: z.number().int().min(1).max(20).default(20),
     },
-  }, safeTool(async ({ title, author, isbn, limit }) => {
+  }, safeTool(async ({ title, author, isbn, publishedYear, limit }) => {
     const result = await client.searchBooks({ title, author, isbn, mediaKind: "ebook" });
     const candidates = result.candidates
-      .map((candidate, index) => ({ candidate, index, score: metadataScore(candidate, { title, author, isbn }) }))
+      .map((candidate, index) => ({ candidate, index, score: metadataScore(candidate, { title, author, isbn, publishedYear }) }))
       .sort((a, b) => b.score - a.score || a.index - b.index)
       .map(({ candidate }) => candidate);
     return {

@@ -399,7 +399,7 @@ describe("Streamable HTTP MCP service", () => {
       await client.connect(transport);
       const listed = await client.listTools();
       expect(listed.tools.map((tool) => tool.name)).toContain("request_book");
-      const result = await client.callTool({ name: "search_books", arguments: { title: "The Dispossessed", author: "Ursula K. Le Guin" } });
+      const result = await client.callTool({ name: "search_books", arguments: { title: "The Dispossessed", author: "Ursula K. Le Guin", publishedYear: 1974 } });
       expect(result.isError).not.toBe(true);
       const search = result.structuredContent as { candidates: MetadataCandidate[] };
       expect(search.candidates[0]).toMatchObject({ providerId: "edition-original", isbn13: "9780061054884" });
