@@ -31,6 +31,60 @@ const bookSchema = z.object({
 const toolBookSchema = bookSchema.omit({ subtitle: true, seriesName: true, seriesIndex: true, publishedYear: true, language: true, coverUrl: true });
 type ToolBook = z.infer<typeof bookSchema>;
 
+const mediaKindOutputSchema = z.enum(["ebook", "audiobook", "comic"]);
+const requestStateOutputSchema = z.enum(["not_requested", "retryable", "requesting", "unknown", "already_available", "already_requested", "newly_requested", "failed"]);
+const publicStatusOutputSchema = z.enum(["not_requested", "already_available", "already_requested", "newly_requested", "failed"]);
+const bookOutputSchema = z.object({
+  title: z.string(),
+  authors: z.array(z.string()).optional(),
+  isbn10: z.string().optional(),
+  isbn13: z.string().optional(),
+  providerKey: z.string().optional(),
+  providerId: z.string().optional(),
+  mediaKind: mediaKindOutputSchema,
+});
+const historyOutputSchema = z.object({
+  workKey: z.string(),
+  book: bookOutputSchema,
+  recommendationSources: z.array(z.string()),
+  recommendedAt: z.string().nullable(),
+  feedback: z.string().nullable(),
+  feedbackAt: z.string().nullable(),
+  requestState: requestStateOutputSchema,
+  requestId: z.number().nullable(),
+  requestStatus: z.string().nullable(),
+  requestLink: z.string().nullable(),
+  lastError: z.string().nullable(),
+  updatedAt: z.string(),
+  events: z.array(z.object({
+    eventId: z.string(),
+    type: z.enum(["recommendation", "feedback"]),
+    source: z.string().nullable(),
+    feedback: z.string().nullable(),
+    createdAt: z.string(),
+  })),
+  link: z.string().nullable(),
+  status: publicStatusOutputSchema,
+  retryable: z.boolean(),
+  idempotencyKey: z.string(),
+});
+const candidateOutputSchema = z.object({
+  provider: z.string(),
+  providerKey: z.string(),
+  providerId: z.string(),
+  title: z.string().optional(),
+  subtitle: z.string().optional(),
+  authors: z.array(z.string()).optional(),
+  isbn10: z.string().optional(),
+  isbn13: z.string().optional(),
+  seriesName: z.string().optional(),
+  seriesIndex: z.union([z.number(), z.string()]).optional(),
+  publishedYear: z.number().optional(),
+  language: z.string().optional(),
+  coverUrl: z.string().optional(),
+  sourceUrl: z.string().optional(),
+});
+
 function identity(book: ToolBook): BookIdentity {
   return {
     title: book.title,
@@ -263,12 +317,21 @@ export function createRequestBookHandler(client: BookOrbitClient, history: Histo
 }
 
 export function createMcpServer(client: BookOrbitClient, history: HistoryStore, baseUrl: string): McpServer {
-  const server = new McpServer({ name: "bookorbit-mcp", version: "0.1.0" });
+  const server = new McpServer({ name: "bookorbit-mcp", version: "0.1.0" }, {
+    instructions: "Use search_books to identify an edition, then find_existing_books before requesting it. request_book is idempotent and stores its outcome. Use record_book_event and get_reading_history to preserve recommendations and feedback between runs.",
+  });
   const requestBook = createRequestBookHandler(client, history, baseUrl);
 
   server.registerTool("search_books", {
     title: "Search BookOrbit metadata",
     description: "Resolve a title, author, year, or ISBN to BookOrbit book metadata, ISBNs, and editions. Searches e-books, ranks the closest edition first, and reports provider failures.",
+    outputSchema: z.object({
+      candidates: z.array(candidateOutputSchema),
+      providerStatuses: z.array(z.object({ provider: z.string(), outcome: z.enum(["timeout", "throttled", "failed"]) })),
+      complete: z.boolean(),
+      truncated: z.boolean(),
+    }),
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
     inputSchema: {
       title: z.string().trim().min(1).max(500),
       author: z.string().trim().max(255).optional(),
@@ -308,6 +371,17 @@ export function createMcpServer(client: BookOrbitClient, history: HistoryStore, 
   server.registerTool("find_existing_books", {
     title: "Find existing books and requests",
     description: "Check candidate e-books against accessible library copies and active BookOrbit requests.",
+    outputSchema: z.object({
+      items: z.array(z.object({
+        book: bookOutputSchema,
+        status: z.enum(["already_available", "already_requested", "missing", "failed"]),
+        bookId: z.number().optional(),
+        requestId: z.number().nullable().optional(),
+        requestStatus: z.string().nullable().optional(),
+        link: z.string().nullable().optional(),
+      })),
+    }),
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
     inputSchema: { books: z.array(toolBookSchema).min(1).max(50) },
   }, safeTool(async ({ books }) => {
     const availability = await client.checkAvailability(books.map(identity));
@@ -322,6 +396,8 @@ export function createMcpServer(client: BookOrbitClient, history: HistoryStore, 
   server.registerTool("request_book", {
     title: "Request an e-book",
     description: "Request a resolved English e-book. EPUB is preferred; PDF is included only for technical works. Uses one idempotent request per book and medium.",
+    outputSchema: historyOutputSchema,
+    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
     inputSchema: {
       book: bookSchema,
       technicalWork: z.boolean().default(false),
@@ -331,6 +407,8 @@ export function createMcpServer(client: BookOrbitClient, history: HistoryStore, 
   server.registerTool("get_request_status", {
     title: "Get BookOrbit request status",
     description: "Return the current BookOrbit request state and its BookOrbit link.",
+    outputSchema: z.object({ requestId: z.number(), status: z.string(), title: z.string(), mediaKind: mediaKindOutputSchema, link: z.string() }),
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
     inputSchema: { requestId: z.number().int().positive() },
   }, safeTool(async ({ requestId }) => {
     const request = await client.getRequest(requestId);
@@ -347,6 +425,8 @@ export function createMcpServer(client: BookOrbitClient, history: HistoryStore, 
   server.registerTool("record_book_event", {
     title: "Record a recommendation or feedback",
     description: "Persist a book recommendation or the user's feedback for future reading-task runs. Reuse eventId when retrying the same event.",
+    outputSchema: historyOutputSchema,
+    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
     inputSchema: {
       type: z.enum(["recommendation", "feedback"]),
       book: bookSchema,
@@ -368,6 +448,8 @@ export function createMcpServer(client: BookOrbitClient, history: HistoryStore, 
   server.registerTool("get_reading_history", {
     title: "Get reading recommendation history",
     description: "Return adapter-stored recommendations, BookOrbit request IDs/states, and feedback.",
+    outputSchema: z.object({ items: z.array(historyOutputSchema) }),
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
     inputSchema: {
       query: z.string().trim().max(200).optional(),
       limit: z.number().int().min(1).max(200).default(50),

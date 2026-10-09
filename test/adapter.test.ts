@@ -357,7 +357,7 @@ describe("Streamable HTTP MCP service", () => {
   });
 
   it("completes initialize, tools/list, and tools/call through the MCP TypeScript SDK client", async () => {
-    const fetcher = (async (input) => {
+    const fetcher = (async (input, init) => {
       const url = new URL(input instanceof Request ? input.url : input.toString());
       if (url.pathname.endsWith("/auth/refresh")) {
         return Response.json({
@@ -374,6 +374,24 @@ describe("Streamable HTTP MCP service", () => {
           mediaKind: "ebook",
           authors: ["Ursula K. Le Guin"],
           isbn13: "9780575079038",
+        });
+      }
+      if (url.pathname.endsWith("/book-requests/availability")) {
+        const body = JSON.parse(String(init?.body)) as { items: Array<{ title: string }> };
+        return Response.json(body.items.map((item) => ({
+          ownedBookId: item.title === "The Dispossessed" ? 9 : null,
+          existingRequestId: null,
+          existingRequestStatus: null,
+          alreadySubscribed: false,
+        })));
+      }
+      if (url.pathname.endsWith("/book-requests/default-destinations")) {
+        return Response.json({ ebook: { libraryId: 1, libraryName: "Main", folderId: null }, audiobook: null, comic: null });
+      }
+      if (url.pathname.endsWith("/book-requests")) {
+        return Response.json({
+          request: { id: 43, status: "pending", title: "New request", mediaKind: "ebook" },
+          subscribed: false,
         });
       }
       const candidates = [
@@ -400,16 +418,45 @@ describe("Streamable HTTP MCP service", () => {
       await client.connect(transport);
       const listed = await client.listTools();
       expect(listed.tools.map((tool) => tool.name)).toContain("request_book");
+      expect(listed.tools.every((tool) => tool.outputSchema !== undefined)).toBe(true);
+      const searchTool = listed.tools.find((tool) => tool.name === "search_books")!;
+      const requestTool = listed.tools.find((tool) => tool.name === "request_book")!;
+      expect(searchTool.outputSchema).toBeDefined();
+      expect(searchTool.annotations).toMatchObject({ readOnlyHint: true, openWorldHint: true });
+      expect(requestTool.outputSchema).toBeDefined();
+      expect(requestTool.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: false });
       const result = await client.callTool({ name: "search_books", arguments: { title: "The Dispossessed", author: "Ursula K. Le Guin", publishedYear: 1974 } });
       expect(result.isError).not.toBe(true);
       const search = result.structuredContent as { candidates: MetadataCandidate[]; complete: boolean };
       expect(search.candidates[0]).toMatchObject({ providerId: "edition-original", isbn13: "9780061054884" });
       expect(search.complete).toBe(false);
+      const availability = await client.callTool({
+        name: "find_existing_books",
+        arguments: { books: [{ title: "The Dispossessed", authors: ["Ursula K. Le Guin"] }] },
+      });
+      expect(availability.isError).not.toBe(true);
+      expect(availability.structuredContent).toMatchObject({ items: [{ status: "already_available", bookId: 9 }] });
+      const requested = await client.callTool({
+        name: "request_book",
+        arguments: { book: { title: "New request", authors: ["Example Author"] } },
+      });
+      expect(requested.isError).not.toBe(true);
+      expect(requested.structuredContent).toMatchObject({ requestId: 43, requestState: "newly_requested" });
       const status = await client.callTool({ name: "get_request_status", arguments: { requestId: 42 } });
       expect(status.structuredContent).toMatchObject({ requestId: 42, status: "available" });
+      const event = await client.callTool({
+        name: "record_book_event",
+        arguments: {
+          type: "recommendation",
+          book: { title: "The Dispossessed", authors: ["Ursula K. Le Guin"] },
+          source: "reading task",
+          eventId: "sdk-test-recommendation",
+        },
+      });
+      expect(event.isError).not.toBe(true);
       const history = await client.callTool({ name: "get_reading_history", arguments: { query: "The Dispossessed" } });
       expect(history.structuredContent).toMatchObject({
-        items: [{ requestId: 42, requestStatus: "available", status: "already_available" }],
+        items: [{ requestId: 42, requestStatus: "available", status: "already_available", events: [{ eventId: "sdk-test-recommendation" }] }],
       });
     } finally {
       await client.close();
