@@ -118,11 +118,64 @@ export interface SmartScopeWriteResult {
   episodeCount?: number | null;
 }
 
+export interface SmartScopeRecord extends SmartScopeWriteResult {
+  libraryId: number | null;
+  filter: Record<string, unknown> | null;
+  defaultSort: Array<{ field: string; dir: "asc" | "desc" }>;
+  syncToKobo: boolean;
+  isOwner: boolean;
+  displayOrder: number;
+}
+
 export interface CollectionWriteResult {
   id: number;
   name: string;
   mediaType: BookOrbitMediaType;
   bookCount: number;
+}
+
+export interface CollectionRecord extends CollectionWriteResult {
+  icon: string | null;
+  description: string | null;
+  isPublic: boolean;
+  isOwner: boolean;
+  syncToKobo: boolean;
+  displayOrder: number;
+  podcastCount: number;
+}
+
+export interface CreateCollectionPayload {
+  name: string;
+  icon: string;
+  description?: string;
+  isPublic?: boolean;
+  syncToKobo?: boolean;
+}
+
+export interface UpdateSmartScopePayload {
+  name?: string;
+  icon?: string;
+  filter?: Record<string, unknown> | null;
+  defaultSort?: Array<{ field: string; dir: "asc" | "desc" }>;
+  isPublic?: boolean;
+  syncToKobo?: boolean;
+}
+
+export interface LibraryBookCard {
+  id: number;
+  status: string;
+  title: string | null;
+  authors: string[];
+  seriesName: string | null;
+  isbn13: string | null;
+  tags: string[];
+}
+
+export interface LibraryBooksPage {
+  items: LibraryBookCard[];
+  total: number;
+  page: number;
+  size: number;
 }
 
 export class BookOrbitApiError extends Error {
@@ -259,9 +312,17 @@ export class BookOrbitClient {
   }
 
   addTagsToBooks(bookIds: number[], tags: string[]): Promise<void> {
+    return this.updateBookTags(bookIds, tags, "add");
+  }
+
+  removeTagsFromBooks(bookIds: number[], tags: string[]): Promise<void> {
+    return this.updateBookTags(bookIds, tags, "remove");
+  }
+
+  private updateBookTags(bookIds: number[], tags: string[], mode: "add" | "remove"): Promise<void> {
     return this.noContent("books/bulk-update-tags", {
       method: "POST",
-      body: JSON.stringify({ bookIds, mode: "add", tags }),
+      body: JSON.stringify({ bookIds, mode, tags }),
     });
   }
 
@@ -269,6 +330,43 @@ export class BookOrbitClient {
     return this.json<CollectionWriteResult>(`collections/${collectionId}/books`, {
       method: "POST",
       body: JSON.stringify({ bookIds }),
+    });
+  }
+
+  listSmartScopes(): Promise<SmartScopeRecord[]> {
+    return this.json<SmartScopeRecord[]>("smart-scopes");
+  }
+
+  getSmartScope(id: number): Promise<SmartScopeRecord> {
+    return this.json<SmartScopeRecord>(`smart-scopes/${id}`);
+  }
+
+  updateSmartScope(id: number, payload: UpdateSmartScopePayload): Promise<SmartScopeRecord> {
+    return this.json<SmartScopeRecord>(`smart-scopes/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    });
+  }
+
+  deleteSmartScope(id: number): Promise<void> {
+    return this.noContent(`smart-scopes/${id}`, { method: "DELETE" });
+  }
+
+  listCollections(): Promise<CollectionRecord[]> {
+    return this.json<CollectionRecord[]>("collections");
+  }
+
+  createCollection(payload: CreateCollectionPayload): Promise<CollectionRecord> {
+    return this.json<CollectionRecord>("collections", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  }
+
+  browseBooks(page: number, size: number): Promise<LibraryBooksPage> {
+    return this.json<LibraryBooksPage>("books/query", {
+      method: "POST",
+      body: JSON.stringify({ sort: [{ field: "title", dir: "asc" }], pagination: { page, size } }),
     });
   }
 

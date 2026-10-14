@@ -115,6 +115,77 @@ const collectionWriteOutputSchema = z.object({
   submittedBookCount: z.number(),
   bookCount: z.number(),
 });
+const sortSpecSchema = z.object({ field: z.string(), dir: z.enum(["asc", "desc"]) });
+const smartScopeListItemOutputSchema = z.object({
+  id: z.number(),
+  name: z.string(),
+  icon: z.string().nullable(),
+  mediaType: z.enum(["books", "podcasts"]),
+  libraryId: z.number().nullable(),
+  filter: z.record(z.string(), z.unknown()).nullable(),
+  defaultSort: z.array(sortSpecSchema),
+  isPublic: z.boolean(),
+  syncToKobo: z.boolean(),
+  isOwner: z.boolean(),
+  displayOrder: z.number(),
+  bookCount: z.number().nullable(),
+  episodeCount: z.number().nullable(),
+});
+const collectionListItemOutputSchema = z.object({
+  id: z.number(),
+  name: z.string(),
+  icon: z.string().nullable(),
+  description: z.string().nullable(),
+  mediaType: z.enum(["books", "podcasts"]),
+  isPublic: z.boolean(),
+  isOwner: z.boolean(),
+  syncToKobo: z.boolean(),
+  displayOrder: z.number(),
+  bookCount: z.number(),
+  podcastCount: z.number(),
+});
+const libraryBookOutputSchema = z.object({
+  id: z.number(),
+  status: z.string(),
+  title: z.string().nullable(),
+  authors: z.array(z.string()),
+  seriesName: z.string().nullable(),
+  isbn13: z.string().nullable(),
+  tags: z.array(z.string()),
+});
+const libraryBooksOutputSchema = z.object({
+  items: z.array(libraryBookOutputSchema),
+  total: z.number(),
+  page: z.number(),
+  size: z.number(),
+});
+const updateSmartScopeInputSchema = z.object({
+  scopeId: z.number().int().positive(),
+  name: z.string().trim().min(1).max(255).optional(),
+  icon: z.string().trim().min(1).max(100).optional(),
+  filter: z.record(z.string(), z.unknown()).nullable().optional(),
+  defaultSort: z.array(sortSpecSchema).optional(),
+  isPublic: z.boolean().optional(),
+  syncToKobo: z.boolean().optional(),
+}).refine(({ scopeId: _scopeId, ...changes }) => Object.values(changes).some((value) => value !== undefined), {
+  message: "Provide at least one Smart Scope field to update",
+});
+const createCollectionInputSchema = z.object({
+  name: z.string().trim().min(1).max(255),
+  icon: z.string().trim().min(1).max(100),
+  description: z.string().max(1000).optional(),
+  isPublic: z.boolean().optional(),
+  syncToKobo: z.boolean().optional(),
+});
+const createCollectionOutputSchema = z.object({
+  collectionId: z.number(),
+  name: z.string(),
+  icon: z.string().nullable(),
+  description: z.string().nullable(),
+  mediaType: z.enum(["books", "podcasts"]),
+  isPublic: z.boolean(),
+  bookCount: z.number(),
+});
 
 function identity(book: ToolBook): BookIdentity {
   return {
@@ -349,7 +420,7 @@ export function createRequestBookHandler(client: BookOrbitClient, history: Histo
 
 export function createMcpServer(client: BookOrbitClient, history: HistoryStore, baseUrl: string): McpServer {
   const server = new McpServer({ name: "bookorbit-mcp", version: "0.1.0" }, {
-    instructions: "Use search_books to identify an edition, then find_existing_books before requesting it. request_book is idempotent and stores its outcome. Use create_smart_scope for saved filters, add_tags_to_books to add (not replace) tags on known book IDs, and add_books_to_collection for known book and Collection IDs. Smart Scope creation is not idempotent; isPublic=true shares the scope. Use record_book_event and get_reading_history to preserve recommendations and feedback between runs.",
+    instructions: "Use search_books to identify an edition, then find_existing_books before requesting it. request_book is idempotent and stores its outcome. Use browse_library, list_smart_scopes, and list_collections to resolve BookOrbit IDs. Use create_smart_scope and create_collection for new containers; Smart Scope creation is not idempotent and isPublic=true shares it. Tag tools require library metadata-edit permission; removing tags may trigger BookOrbit metadata writes and file renames. delete_smart_scope requires the current name as confirmation. Use record_book_event and get_reading_history to preserve recommendations and feedback between runs.",
   });
   const requestBook = createRequestBookHandler(client, history, baseUrl);
 
@@ -456,15 +527,29 @@ export function createMcpServer(client: BookOrbitClient, history: HistoryStore, 
 
   server.registerTool("add_tags_to_books", {
     title: "Add tags to existing books",
-    description: "Add tags to existing library books by BookOrbit book ID. Existing tags are preserved. Requires BookOrbit's library metadata-edit permission; use only when the target book IDs are known.",
+    description: "Add tags to existing library books by BookOrbit book ID. Existing tags are preserved. Requires BookOrbit's library metadata-edit permission; BookOrbit may write metadata to or rename the book's files.",
     outputSchema: z.object({ targetBookCount: z.number(), tags: z.array(z.string()) }),
-    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+    annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
     inputSchema: {
       bookIds: bookIdsSchema,
       tags: z.array(z.string().trim().min(1)).min(1),
     },
   }, safeTool(async ({ bookIds, tags }) => {
     await client.addTagsToBooks(bookIds, tags);
+    return { targetBookCount: bookIds.length, tags };
+  }));
+
+  server.registerTool("remove_tags_from_books", {
+    title: "Remove tags from existing books",
+    description: "Remove only the specified tags from existing library books by BookOrbit book ID. Requires BookOrbit's library metadata-edit permission; BookOrbit may write metadata to or rename the book's files.",
+    outputSchema: z.object({ targetBookCount: z.number(), tags: z.array(z.string()) }),
+    annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
+    inputSchema: {
+      bookIds: bookIdsSchema,
+      tags: z.array(z.string().trim().min(1)).min(1),
+    },
+  }, safeTool(async ({ bookIds, tags }) => {
+    await client.removeTagsFromBooks(bookIds, tags);
     return { targetBookCount: bookIds.length, tags };
   }));
 
@@ -484,6 +569,133 @@ export function createMcpServer(client: BookOrbitClient, history: HistoryStore, 
       name: collection.name,
       mediaType: collection.mediaType,
       submittedBookCount: bookIds.length,
+      bookCount: collection.bookCount,
+    };
+  }));
+
+  server.registerTool("list_smart_scopes", {
+    title: "List BookOrbit Smart Scopes",
+    description: "List Smart Scopes visible to the authenticated account, including IDs, ownership, filters, and matching item counts.",
+    outputSchema: z.object({ items: z.array(smartScopeListItemOutputSchema) }),
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+    inputSchema: {},
+  }, safeTool(async () => ({
+    items: (await client.listSmartScopes()).map((scope) => ({
+      id: scope.id,
+      name: scope.name,
+      icon: scope.icon,
+      mediaType: scope.mediaType,
+      libraryId: scope.libraryId,
+      filter: scope.filter,
+      defaultSort: scope.defaultSort,
+      isPublic: scope.isPublic,
+      syncToKobo: scope.syncToKobo,
+      isOwner: scope.isOwner,
+      displayOrder: scope.displayOrder,
+      bookCount: scope.bookCount ?? null,
+      episodeCount: scope.episodeCount ?? null,
+    })),
+  })));
+
+  server.registerTool("list_collections", {
+    title: "List BookOrbit Collections",
+    description: "List Collections visible to the authenticated account, including IDs, ownership, media type, and member counts.",
+    outputSchema: z.object({ items: z.array(collectionListItemOutputSchema) }),
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+    inputSchema: {},
+  }, safeTool(async () => ({
+    items: (await client.listCollections()).map((collection) => ({
+      id: collection.id,
+      name: collection.name,
+      icon: collection.icon,
+      description: collection.description,
+      mediaType: collection.mediaType,
+      isPublic: collection.isPublic,
+      isOwner: collection.isOwner,
+      syncToKobo: collection.syncToKobo,
+      displayOrder: collection.displayOrder,
+      bookCount: collection.bookCount,
+      podcastCount: collection.podcastCount,
+    })),
+  })));
+
+  server.registerTool("browse_library", {
+    title: "Browse BookOrbit library",
+    description: "Browse all books accessible to the authenticated account without a search query. Results are paginated and sorted by title; use the returned IDs with tagging and Collection tools.",
+    outputSchema: libraryBooksOutputSchema,
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+    inputSchema: {
+      page: z.number().int().min(0).default(0),
+      size: z.number().int().min(1).max(200).default(50),
+    },
+  }, safeTool(async ({ page, size }) => {
+    const result = await client.browseBooks(page, size);
+    return {
+      items: result.items.map((book) => ({
+        id: book.id,
+        status: book.status,
+        title: book.title,
+        authors: book.authors,
+        seriesName: book.seriesName,
+        isbn13: book.isbn13,
+        tags: book.tags,
+      })),
+      total: result.total,
+      page: result.page,
+      size: result.size,
+    };
+  }));
+
+  server.registerTool("update_smart_scope", {
+    title: "Update a BookOrbit Smart Scope",
+    description: "Update the supplied fields of a Smart Scope by ID. Use list_smart_scopes first; omitted fields remain unchanged. Set filter to null to clear its filter.",
+    outputSchema: smartScopeWriteOutputSchema,
+    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    inputSchema: updateSmartScopeInputSchema,
+  }, safeTool(async ({ scopeId, ...changes }) => {
+    const scope = await client.updateSmartScope(scopeId, changes);
+    return {
+      id: scope.id,
+      name: scope.name,
+      icon: scope.icon,
+      mediaType: scope.mediaType,
+      isPublic: scope.isPublic,
+      bookCount: scope.bookCount ?? null,
+      episodeCount: scope.episodeCount ?? null,
+    };
+  }));
+
+  server.registerTool("delete_smart_scope", {
+    title: "Delete a BookOrbit Smart Scope",
+    description: "Permanently delete a Smart Scope by ID. The current scope name must match expectedName to guard against stale IDs; this does not delete books.",
+    outputSchema: z.object({ id: z.number(), name: z.string(), deleted: z.literal(true) }),
+    annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+    inputSchema: {
+      scopeId: z.number().int().positive(),
+      expectedName: z.string().trim().min(1).max(255),
+    },
+  }, safeTool(async ({ scopeId, expectedName }) => {
+    const scope = await client.getSmartScope(scopeId);
+    if (scope.name !== expectedName) throw new AdapterError("Smart Scope name did not match; nothing was deleted.");
+    await client.deleteSmartScope(scopeId);
+    return { id: scopeId, name: scope.name, deleted: true };
+  }));
+
+  server.registerTool("create_collection", {
+    title: "Create a BookOrbit Collection",
+    description: "Create a standard book Collection (not a Smart Scope). Collections are private by default; isPublic=true makes the Collection public.",
+    outputSchema: createCollectionOutputSchema,
+    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    inputSchema: createCollectionInputSchema,
+  }, safeTool(async (input) => {
+    const collection = await client.createCollection(input);
+    return {
+      collectionId: collection.id,
+      name: collection.name,
+      icon: collection.icon,
+      description: collection.description,
+      mediaType: collection.mediaType,
+      isPublic: collection.isPublic,
       bookCount: collection.bookCount,
     };
   }));

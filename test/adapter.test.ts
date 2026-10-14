@@ -187,6 +187,106 @@ describe("BookOrbit metadata stream", () => {
     expect(JSON.parse(String(calls[2]?.init?.body))).toEqual({ bookIds: [9, 10], mode: "add", tags: ["to-read", "sci-fi"] });
     expect(JSON.parse(String(calls[3]?.init?.body))).toEqual({ bookIds: [9, 10] });
   });
+
+  it("maps browsing and Smart Scope/Collection management to BookOrbit 3.2 routes", async () => {
+    const calls: Array<{ url: URL; init?: RequestInit }> = [];
+    const smartScope = {
+      id: 7,
+      name: "Unread science fiction",
+      icon: "auto_stories",
+      mediaType: "books",
+      libraryId: null,
+      filter: null,
+      defaultSort: [{ field: "title", dir: "asc" }],
+      isPublic: false,
+      syncToKobo: false,
+      isOwner: true,
+      displayOrder: 0,
+      bookCount: 4,
+    };
+    const collection = {
+      id: 12,
+      name: "To read",
+      icon: "auto_stories",
+      description: "Next up",
+      mediaType: "books",
+      isPublic: false,
+      isOwner: true,
+      syncToKobo: false,
+      displayOrder: 0,
+      bookCount: 1,
+      podcastCount: 0,
+    };
+    const fetcher = (async (input, init) => {
+      const url = new URL(input instanceof Request ? input.url : input.toString());
+      calls.push({ url, init });
+      if (url.pathname.endsWith("/auth/refresh")) {
+        return Response.json({
+          accessToken: "access-token",
+          refreshToken: "refresh-token",
+          accessTokenExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+        });
+      }
+      if (url.pathname.endsWith("/smart-scopes") && init?.method === undefined) return Response.json([smartScope]);
+      if (url.pathname.endsWith("/smart-scopes/7") && init?.method === undefined) return Response.json(smartScope);
+      if (url.pathname.endsWith("/smart-scopes/7") && init?.method === "PATCH") {
+        return Response.json({ ...smartScope, name: "Updated scope" });
+      }
+      if (url.pathname.endsWith("/smart-scopes/7") && init?.method === "DELETE") return new Response(null, { status: 204 });
+      if (url.pathname.endsWith("/collections") && init?.method === undefined) return Response.json([collection]);
+      if (url.pathname.endsWith("/collections") && init?.method === "POST") return Response.json(collection);
+      if (url.pathname.endsWith("/books/query") && init?.method === "POST") {
+        return Response.json({
+          items: [{ id: 9, status: "present", title: "Alice's Adventures in Wonderland", authors: ["Lewis Carroll"], seriesName: null, isbn13: null, tags: ["classic"] }],
+          total: 1,
+          page: 1,
+          size: 20,
+        });
+      }
+      if (url.pathname.endsWith("/books/bulk-update-tags") && init?.method === "POST") return new Response(null, { status: 204 });
+      throw new Error(`Unexpected BookOrbit route: ${url.pathname}`);
+    }) as typeof fetch;
+    const client = new BookOrbitClient({
+      baseUrl: "https://books.example.test",
+      getRefreshToken: () => "oidc-refresh-token",
+      saveRefreshToken: () => {},
+      fetcher,
+    });
+
+    const scopes = await client.listSmartScopes();
+    const scope = await client.getSmartScope(7);
+    const updatedScope = await client.updateSmartScope(7, { name: "Updated scope" });
+    await client.deleteSmartScope(7);
+    const collections = await client.listCollections();
+    const createdCollection = await client.createCollection({ name: "To read", icon: "auto_stories", description: "Next up" });
+    const page = await client.browseBooks(1, 20);
+    await client.removeTagsFromBooks([9], ["classic"]);
+
+    expect(scopes[0]?.id).toBe(7);
+    expect(scope.name).toBe("Unread science fiction");
+    expect(updatedScope.name).toBe("Updated scope");
+    expect(collections[0]?.isOwner).toBe(true);
+    expect(createdCollection.id).toBe(12);
+    expect(page.items[0]).toMatchObject({ id: 9, title: "Alice's Adventures in Wonderland", tags: ["classic"] });
+    expect(calls.map(({ url }) => url.pathname)).toEqual([
+      "/api/v1/auth/refresh",
+      "/api/v1/smart-scopes",
+      "/api/v1/smart-scopes/7",
+      "/api/v1/smart-scopes/7",
+      "/api/v1/smart-scopes/7",
+      "/api/v1/collections",
+      "/api/v1/collections",
+      "/api/v1/books/query",
+      "/api/v1/books/bulk-update-tags",
+    ]);
+    expect(JSON.parse(String(calls[3]?.init?.body))).toEqual({ name: "Updated scope" });
+    expect(JSON.parse(String(calls[6]?.init?.body))).toEqual({ name: "To read", icon: "auto_stories", description: "Next up" });
+    expect(JSON.parse(String(calls[7]?.init?.body))).toEqual({
+      sort: [{ field: "title", dir: "asc" }],
+      pagination: { page: 1, size: 20 },
+    });
+    expect(JSON.parse(String(calls[8]?.init?.body))).toEqual({ bookIds: [9], mode: "remove", tags: ["classic"] });
+  });
 });
 
 describe("BookOrbit request history", () => {
@@ -395,13 +495,20 @@ describe("Streamable HTTP MCP service", () => {
       expect(toolList.result.tools.map((tool) => tool.name).sort()).toEqual([
         "add_books_to_collection",
         "add_tags_to_books",
+        "browse_library",
+        "create_collection",
         "create_smart_scope",
+        "delete_smart_scope",
         "find_existing_books",
         "get_reading_history",
         "get_request_status",
+        "list_collections",
+        "list_smart_scopes",
         "record_book_event",
+        "remove_tags_from_books",
         "request_book",
         "search_books",
+        "update_smart_scope",
       ]);
 
       const search = await fetch(endpoint, {
@@ -422,6 +529,33 @@ describe("Streamable HTTP MCP service", () => {
   });
 
   it("completes initialize, tools/list, and tools/call through the MCP TypeScript SDK client", async () => {
+    let scopeRecord = {
+      id: 51,
+      name: "Unread science fiction",
+      icon: "auto_stories",
+      mediaType: "books",
+      libraryId: null,
+      filter: { type: "group", join: "AND", rules: [{ type: "rule", field: "readStatus", operator: "includesAny", value: ["unread"] }] },
+      defaultSort: [{ field: "title", dir: "asc" }],
+      isPublic: false,
+      syncToKobo: false,
+      isOwner: true,
+      displayOrder: 0,
+      bookCount: 4,
+    };
+    const collectionRecord = {
+      id: 12,
+      name: "To read",
+      icon: "auto_stories",
+      description: "Next up",
+      mediaType: "books",
+      isPublic: false,
+      isOwner: true,
+      syncToKobo: false,
+      displayOrder: 0,
+      bookCount: 2,
+      podcastCount: 0,
+    };
     const fetcher = (async (input, init) => {
       const url = new URL(input instanceof Request ? input.url : input.toString());
       if (url.pathname.endsWith("/auth/refresh")) {
@@ -459,14 +593,28 @@ describe("Streamable HTTP MCP service", () => {
           subscribed: false,
         });
       }
+      if (url.pathname.endsWith("/smart-scopes/51")) {
+        if (init?.method === "PATCH") {
+          scopeRecord = { ...scopeRecord, ...JSON.parse(String(init.body)) };
+          return Response.json(scopeRecord);
+        }
+        if (init?.method === "DELETE") return new Response(null, { status: 204 });
+        return Response.json(scopeRecord);
+      }
       if (url.pathname.endsWith("/smart-scopes")) {
+        if (init?.method === "POST") return Response.json(scopeRecord);
+        return Response.json([scopeRecord]);
+      }
+      if (url.pathname.endsWith("/collections")) {
+        if (init?.method === "POST") return Response.json({ ...collectionRecord, id: 72, name: "Reading list" });
+        return Response.json([collectionRecord]);
+      }
+      if (url.pathname.endsWith("/books/query")) {
         return Response.json({
-          id: 51,
-          name: "Unread science fiction",
-          icon: "auto_stories",
-          mediaType: "books",
-          isPublic: false,
-          bookCount: 4,
+          items: [{ id: 9, status: "present", title: "Alice's Adventures in Wonderland", authors: ["Lewis Carroll"], seriesName: null, isbn13: null, tags: ["classic"] }],
+          total: 1,
+          page: 0,
+          size: 50,
         });
       }
       if (url.pathname.endsWith("/books/bulk-update-tags")) return new Response(null, { status: 204 });
@@ -503,6 +651,13 @@ describe("Streamable HTTP MCP service", () => {
       const smartScopeTool = listed.tools.find((tool) => tool.name === "create_smart_scope")!;
       const addTagsTool = listed.tools.find((tool) => tool.name === "add_tags_to_books")!;
       const collectionTool = listed.tools.find((tool) => tool.name === "add_books_to_collection")!;
+      const listScopesTool = listed.tools.find((tool) => tool.name === "list_smart_scopes")!;
+      const listCollectionsTool = listed.tools.find((tool) => tool.name === "list_collections")!;
+      const browseLibraryTool = listed.tools.find((tool) => tool.name === "browse_library")!;
+      const updateScopeTool = listed.tools.find((tool) => tool.name === "update_smart_scope")!;
+      const deleteScopeTool = listed.tools.find((tool) => tool.name === "delete_smart_scope")!;
+      const createCollectionTool = listed.tools.find((tool) => tool.name === "create_collection")!;
+      const removeTagsTool = listed.tools.find((tool) => tool.name === "remove_tags_from_books")!;
       expect(searchTool.outputSchema).toBeDefined();
       expect(searchTool.annotations).toMatchObject({ readOnlyHint: true, openWorldHint: true });
       expect(requestTool.outputSchema).toBeDefined();
@@ -510,7 +665,15 @@ describe("Streamable HTTP MCP service", () => {
       expect(smartScopeTool.outputSchema).toBeDefined();
       expect(smartScopeTool.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: false });
       expect(addTagsTool.outputSchema).toBeDefined();
+      expect(addTagsTool.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: true });
       expect(collectionTool.outputSchema).toBeDefined();
+      expect(listScopesTool.annotations).toMatchObject({ readOnlyHint: true });
+      expect(listCollectionsTool.annotations).toMatchObject({ readOnlyHint: true });
+      expect(browseLibraryTool.annotations).toMatchObject({ readOnlyHint: true });
+      expect(updateScopeTool.outputSchema).toBeDefined();
+      expect(deleteScopeTool.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: true });
+      expect(createCollectionTool.outputSchema).toBeDefined();
+      expect(removeTagsTool.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: true });
       const result = await client.callTool({ name: "search_books", arguments: { title: "The Dispossessed", author: "Ursula K. Le Guin", publishedYear: 1974 } });
       expect(result.isError).not.toBe(true);
       const search = result.structuredContent as { candidates: MetadataCandidate[]; complete: boolean };
@@ -563,6 +726,44 @@ describe("Streamable HTTP MCP service", () => {
         submittedBookCount: 2,
         bookCount: 2,
       });
+      const listedScopes = await client.callTool({ name: "list_smart_scopes", arguments: {} });
+      expect(listedScopes.isError).not.toBe(true);
+      expect(listedScopes.structuredContent).toMatchObject({ items: [{ id: 51, name: "Unread science fiction" }] });
+      const listedCollections = await client.callTool({ name: "list_collections", arguments: {} });
+      expect(listedCollections.isError).not.toBe(true);
+      expect(listedCollections.structuredContent).toMatchObject({ items: [{ id: 12, name: "To read", isOwner: true }] });
+      const library = await client.callTool({ name: "browse_library", arguments: { page: 0, size: 50 } });
+      expect(library.isError).not.toBe(true);
+      expect(library.structuredContent).toMatchObject({ items: [{ id: 9, title: "Alice's Adventures in Wonderland" }], total: 1 });
+      const updatedScope = await client.callTool({
+        name: "update_smart_scope",
+        arguments: { scopeId: 51, name: "Updated scope" },
+      });
+      expect(updatedScope.isError).not.toBe(true);
+      expect(updatedScope.structuredContent).toMatchObject({ id: 51, name: "Updated scope" });
+      const mismatchedDelete = await client.callTool({
+        name: "delete_smart_scope",
+        arguments: { scopeId: 51, expectedName: "Wrong name" },
+      });
+      expect(mismatchedDelete.isError).toBe(true);
+      const deletedScope = await client.callTool({
+        name: "delete_smart_scope",
+        arguments: { scopeId: 51, expectedName: "Updated scope" },
+      });
+      expect(deletedScope.isError).not.toBe(true);
+      expect(deletedScope.structuredContent).toEqual({ id: 51, name: "Updated scope", deleted: true });
+      const createdCollection = await client.callTool({
+        name: "create_collection",
+        arguments: { name: "Reading list", icon: "auto_stories", description: "Next up" },
+      });
+      expect(createdCollection.isError).not.toBe(true);
+      expect(createdCollection.structuredContent).toMatchObject({ collectionId: 72, name: "Reading list", mediaType: "books" });
+      const removedTags = await client.callTool({
+        name: "remove_tags_from_books",
+        arguments: { bookIds: [9], tags: ["classic"] },
+      });
+      expect(removedTags.isError).not.toBe(true);
+      expect(removedTags.structuredContent).toEqual({ targetBookCount: 1, tags: ["classic"] });
       const event = await client.callTool({
         name: "record_book_event",
         arguments: {

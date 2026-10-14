@@ -7,11 +7,18 @@ A Streamable HTTP MCP adapter for BookOrbit 3.2 and later. It exposes metadata s
 | Tool | Description |
 | --- | --- |
 | `search_books` | Find metadata and edition candidates by title, author, publication year, or ISBN. Exact matches rank first; ambiguous candidates and provider failures are reported. |
+| `browse_library` | Browse accessible library books without a search query, page by page. |
 | `find_existing_books` | Check accessible library copies and active requests. |
 | `request_book` | Request an English e-book, preferring EPUB and allowing PDF only for technical works. |
 | `get_request_status` | Return a request's current state and BookOrbit link. |
+| `list_smart_scopes` | List visible Smart Scopes, IDs, filters, ownership, and matching counts. |
+| `update_smart_scope` | Update supplied fields on an owned Smart Scope by ID. |
+| `delete_smart_scope` | Delete an owned Smart Scope by ID after matching its current name. |
 | `create_smart_scope` | Create a Smart Scope using BookOrbit's native filter and sort fields. |
+| `list_collections` | List visible Collections with IDs, ownership, media type, and member counts. |
+| `create_collection` | Create a standard book Collection, private by default. |
 | `add_tags_to_books` | Add tags to existing library books by BookOrbit book ID; existing tags are preserved. |
+| `remove_tags_from_books` | Remove specified tags from existing books. BookOrbit may write metadata or rename files. |
 | `add_books_to_collection` | Add existing library books by ID to an owned Collection. |
 | `record_book_event` | Persist a recommendation or user-feedback event. |
 | `get_reading_history` | Read recommendations, feedback, request IDs, and outcomes stored by this adapter. |
@@ -20,7 +27,7 @@ Requests use a persistent work-and-medium idempotency key aligned with BookOrbit
 
 ## Authentication and configuration
 
-Configure OIDC for a dedicated, non-administrator BookOrbit account with request permission and access to the destination library. Grant the account BookOrbit's library metadata-edit permission if it should use `add_tags_to_books`. Smart Scopes and Collections are created or populated as the authenticated account; these tools do not elevate permissions. Bootstrap the adapter with the native BookOrbit refresh token returned by the OIDC callback. The adapter exchanges and rotates that token through BookOrbit's refresh endpoint, storing each rotation in its private SQLite database with restrictive file permissions. Credentials are not exposed through MCP responses or logs.
+Configure OIDC for a dedicated, non-administrator BookOrbit account with request permission and access to the destination library. Grant the account BookOrbit's library metadata-edit permission to use the tag tools. Tag changes may trigger BookOrbit metadata writes or file renames. Smart Scopes and Collections are created or populated as the authenticated account; these tools do not elevate permissions. Bootstrap the adapter with the native BookOrbit refresh token returned by the OIDC callback. The adapter exchanges and rotates that token through BookOrbit's refresh endpoint, storing each rotation in its private SQLite database with restrictive file permissions. Credentials are not exposed through MCP responses or logs.
 
 | Variable | Purpose |
 | --- | --- |
