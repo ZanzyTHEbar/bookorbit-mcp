@@ -95,6 +95,36 @@ export interface BookRequestSubmitResult {
   subscribed: boolean;
 }
 
+export type BookOrbitMediaType = "books" | "podcasts";
+
+export interface CreateSmartScopePayload {
+  name: string;
+  icon: string;
+  mediaType?: BookOrbitMediaType;
+  libraryId?: number;
+  filter?: Record<string, unknown> | null;
+  defaultSort?: Array<{ field: string; dir: "asc" | "desc" }>;
+  isPublic?: boolean;
+  syncToKobo?: boolean;
+}
+
+export interface SmartScopeWriteResult {
+  id: number;
+  name: string;
+  icon: string | null;
+  mediaType: BookOrbitMediaType;
+  isPublic: boolean;
+  bookCount?: number | null;
+  episodeCount?: number | null;
+}
+
+export interface CollectionWriteResult {
+  id: number;
+  name: string;
+  mediaType: BookOrbitMediaType;
+  bookCount: number;
+}
+
 export class BookOrbitApiError extends Error {
   constructor(
     readonly status: number,
@@ -221,6 +251,27 @@ export class BookOrbitClient {
     });
   }
 
+  createSmartScope(payload: CreateSmartScopePayload): Promise<SmartScopeWriteResult> {
+    return this.json<SmartScopeWriteResult>("smart-scopes", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  }
+
+  addTagsToBooks(bookIds: number[], tags: string[]): Promise<void> {
+    return this.noContent("books/bulk-update-tags", {
+      method: "POST",
+      body: JSON.stringify({ bookIds, mode: "add", tags }),
+    });
+  }
+
+  addBooksToCollection(collectionId: number, bookIds: number[]): Promise<CollectionWriteResult> {
+    return this.json<CollectionWriteResult>(`collections/${collectionId}/books`, {
+      method: "POST",
+      body: JSON.stringify({ bookIds }),
+    });
+  }
+
   getRequest(id: number): Promise<BookRequestItem> {
     return this.json<BookRequestItem>(`book-requests/${id}`);
   }
@@ -230,11 +281,19 @@ export class BookOrbitClient {
   }
 
   private async json<T>(path: string, init: RequestInit = {}): Promise<T> {
-    const response = await this.apiFetch(this.apiUrl(path), {
+    const response = await this.apiRequest(path, init);
+    return (await response.json()) as T;
+  }
+
+  private async noContent(path: string, init: RequestInit = {}): Promise<void> {
+    await this.apiRequest(path, init);
+  }
+
+  private apiRequest(path: string, init: RequestInit): Promise<Response> {
+    return this.apiFetch(this.apiUrl(path), {
       ...init,
       headers: { Accept: "application/json", "Content-Type": "application/json", ...init.headers },
     });
-    return (await response.json()) as T;
   }
 
   private async apiFetch(url: URL, init: RequestInit): Promise<Response> {

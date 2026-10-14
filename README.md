@@ -10,6 +10,9 @@ A Streamable HTTP MCP adapter for BookOrbit 3.2 and later. It exposes metadata s
 | `find_existing_books` | Check accessible library copies and active requests. |
 | `request_book` | Request an English e-book, preferring EPUB and allowing PDF only for technical works. |
 | `get_request_status` | Return a request's current state and BookOrbit link. |
+| `create_smart_scope` | Create a Smart Scope using BookOrbit's native filter and sort fields. |
+| `add_tags_to_books` | Add tags to existing library books by BookOrbit book ID; existing tags are preserved. |
+| `add_books_to_collection` | Add existing library books by ID to an owned Collection. |
 | `record_book_event` | Persist a recommendation or user-feedback event. |
 | `get_reading_history` | Read recommendations, feedback, request IDs, and outcomes stored by this adapter. |
 
@@ -17,7 +20,7 @@ Requests use a persistent work-and-medium idempotency key aligned with BookOrbit
 
 ## Authentication and configuration
 
-Configure OIDC for a dedicated, non-administrator BookOrbit account with request permission and access to the destination library. Bootstrap the adapter with the native BookOrbit refresh token returned by the OIDC callback. The adapter exchanges and rotates that token through BookOrbit's refresh endpoint, storing each rotation in its private SQLite database with restrictive file permissions. Credentials are not exposed through MCP responses or logs.
+Configure OIDC for a dedicated, non-administrator BookOrbit account with request permission and access to the destination library. Grant the account BookOrbit's library metadata-edit permission if it should use `add_tags_to_books`. Smart Scopes and Collections are created or populated as the authenticated account; these tools do not elevate permissions. Bootstrap the adapter with the native BookOrbit refresh token returned by the OIDC callback. The adapter exchanges and rotates that token through BookOrbit's refresh endpoint, storing each rotation in its private SQLite database with restrictive file permissions. Credentials are not exposed through MCP responses or logs.
 
 | Variable | Purpose |
 | --- | --- |
