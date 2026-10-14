@@ -60,3 +60,7 @@ docker compose config
 ```
 
 `Dockerfile` is the Compose build recipe. Deploy `docker-compose.yaml` as a Compose application.
+
+## Releases
+
+Pushes to `main` are released with semantic-release using Conventional Commits: breaking changes bump major, `feat` and `docs` bump minor, and `fix`, `perf`, `revert`, `style`, `refactor`, `test`, `build`, and `ci` commits with a `ci-*` scope bump patch. `chore` commits do not release. Each release updates `package.json` and `CHANGELOG.md`, creates a `vX.Y.Z` tag and GitHub Release, and keeps the package private from npm publishing.
